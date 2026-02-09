@@ -3,8 +3,10 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"time"
 
 	"multistream/backend/internal/models"
 )
@@ -12,12 +14,16 @@ import (
 // KickService handles Kick API interactions (unofficial)
 type KickService struct {
 	BaseURL string
+	Client  *http.Client
 }
 
 // NewKickService creates a new Kick service
 func NewKickService() *KickService {
 	return &KickService{
-		BaseURL: "https://kick.com/api/v2",
+		BaseURL: "https://kick.com/api/v1",
+		Client: &http.Client{
+			Timeout: 10 * time.Second,
+		},
 	}
 }
 
@@ -26,7 +32,8 @@ type KickChannelResponse struct {
 	ID   int    `json:"id"`
 	Slug string `json:"slug"`
 	User struct {
-		Username string `json:"username"`
+		Username   string `json:"username"`
+		ProfilePic string `json:"profile_pic"`
 	} `json:"user"`
 	Livestream *struct {
 		ID           int    `json:"id"`
@@ -37,107 +44,55 @@ type KickChannelResponse struct {
 			URL string `json:"url"`
 		} `json:"thumbnail"`
 	} `json:"livestream"`
+	RecentCategories []struct {
+		Name string `json:"name"`
+	} `json:"recent_categories"`
+	Verified bool `json:"verified"`
 }
 
-// KickSearchResponse for search results
-type KickSearchResponse struct {
-	Channels []struct {
-		ID   int    `json:"id"`
-		Slug string `json:"slug"`
-		User struct {
-			Username   string `json:"username"`
-			ProfilePic string `json:"profile_pic"`
-		} `json:"user"`
-		Livestream *struct {
-			SessionTitle string `json:"session_title"`
-			IsLive       bool   `json:"is_live"`
-			ViewerCount  int    `json:"viewer_count"`
-		} `json:"livestream"`
-	} `json:"channels"`
+// SearchChannels searches for channels on Kick
+func (s *KickService) SearchChannels(query string, maxResults int) ([]models.Streamer, error) {
+	// Try the channel endpoint directly for exact matches
+	channel, err := s.GetChannelInfo(query)
+	if err == nil && channel != nil {
+		return []models.Streamer{*channel}, nil
+	}
+
+	// If exact match fails, return empty (Kick doesn't have a public search API)
+	// We'll rely on YouTube for general searches
+	return []models.Streamer{}, nil
 }
 
 // SearchLiveStreams searches for live streams on Kick
 func (s *KickService) SearchLiveStreams(query string, maxResults int) ([]models.Streamer, error) {
-	// Kick's unofficial search endpoint
-	searchURL := fmt.Sprintf(
-		"%s/search?query=%s",
-		s.BaseURL,
-		url.QueryEscape(query),
-	)
-
-	client := &http.Client{}
-	req, err := http.NewRequest("GET", searchURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	// Set headers to look like a browser request
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to search Kick: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		// If search fails, return empty results (Kick API can be unreliable)
-		return []models.Streamer{}, nil
-	}
-
-	var searchResp KickSearchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	// Convert to our Streamer model - only include live streams
-	streamers := make([]models.Streamer, 0)
-	for _, channel := range searchResp.Channels {
-		if channel.Livestream != nil && channel.Livestream.IsLive {
-			streamers = append(streamers, models.Streamer{
-				ID:          fmt.Sprintf("%d", channel.ID),
-				Platform:    "kick",
-				Username:    channel.Slug,
-				DisplayName: channel.User.Username,
-				Title:       channel.Livestream.SessionTitle,
-				Thumbnail:   channel.User.ProfilePic,
-				ViewerCount: channel.Livestream.ViewerCount,
-				IsLive:      true,
-				EmbedURL:    fmt.Sprintf("https://player.kick.com/%s", channel.Slug),
-				ChatURL:     fmt.Sprintf("https://kick.com/%s/chatroom", channel.Slug),
-			})
-		}
-
-		if len(streamers) >= maxResults {
-			break
-		}
-	}
-
-	return streamers, nil
+	return s.SearchChannels(query, maxResults)
 }
 
 // GetChannelInfo gets detailed info for a specific channel
 func (s *KickService) GetChannelInfo(channelSlug string) (*models.Streamer, error) {
-	channelURL := fmt.Sprintf("%s/channels/%s", s.BaseURL, channelSlug)
+	// Use v1 API for channel info
+	channelURL := fmt.Sprintf("%s/channels/%s", s.BaseURL, url.PathEscape(channelSlug))
 
-	client := &http.Client{}
 	req, err := http.NewRequest("GET", channelURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	// Set headers to look like a browser request
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Referer", "https://kick.com/")
 
-	resp, err := client.Do(req)
+	resp, err := s.Client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get channel info: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("channel not found")
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("channel not found (status %d): %s", resp.StatusCode, string(body))
 	}
 
 	var channelResp KickChannelResponse
@@ -150,6 +105,7 @@ func (s *KickService) GetChannelInfo(channelSlug string) (*models.Streamer, erro
 		Platform:    "kick",
 		Username:    channelResp.Slug,
 		DisplayName: channelResp.User.Username,
+		Thumbnail:   channelResp.User.ProfilePic,
 		IsLive:      false,
 		EmbedURL:    fmt.Sprintf("https://player.kick.com/%s", channelResp.Slug),
 		ChatURL:     fmt.Sprintf("https://kick.com/%s/chatroom", channelResp.Slug),
@@ -162,6 +118,11 @@ func (s *KickService) GetChannelInfo(channelSlug string) (*models.Streamer, erro
 		if channelResp.Livestream.Thumbnail.URL != "" {
 			streamer.Thumbnail = channelResp.Livestream.Thumbnail.URL
 		}
+	}
+
+	// Add category info to title if no livestream title
+	if streamer.Title == "" && len(channelResp.RecentCategories) > 0 {
+		streamer.Title = channelResp.RecentCategories[0].Name
 	}
 
 	return streamer, nil

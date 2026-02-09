@@ -12,24 +12,24 @@ interface PlatformSelectorProps {
 export function PlatformSelector({ selected, onSelect }: PlatformSelectorProps) {
     return (
         <Tabs value={selected} onValueChange={(v) => onSelect(v as Platform)}>
-            <TabsList className="grid w-full grid-cols-3 bg-white/5 border border-white/10 p-1 rounded-xl h-auto">
+            <TabsList className="grid w-full grid-cols-3 bg-white/5 border border-white/10 p-1.5 rounded-xl h-auto">
                 <TabsTrigger
                     value="all"
-                    className="py-3 rounded-lg data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-600 data-[state=active]:to-pink-600 data-[state=active]:text-white data-[state=active]:shadow-lg transition-all"
+                    className="py-3 rounded-lg text-gray-300 data-[state=active]:bg-gradient-to-r data-[state=active]:from-purple-600 data-[state=active]:to-pink-600 data-[state=active]:text-white data-[state=active]:shadow-lg transition-all hover:text-white hover:bg-white/5"
                 >
                     <Globe className="h-4 w-4 mr-2" />
                     All Platforms
                 </TabsTrigger>
                 <TabsTrigger
                     value="youtube"
-                    className="py-3 rounded-lg data-[state=active]:bg-red-600 data-[state=active]:text-white data-[state=active]:shadow-lg transition-all"
+                    className="py-3 rounded-lg text-gray-300 data-[state=active]:bg-red-600 data-[state=active]:text-white data-[state=active]:shadow-lg transition-all hover:text-white hover:bg-white/5"
                 >
                     <Youtube className="h-4 w-4 mr-2" />
                     YouTube
                 </TabsTrigger>
                 <TabsTrigger
                     value="kick"
-                    className="py-3 rounded-lg data-[state=active]:bg-green-600 data-[state=active]:text-white data-[state=active]:shadow-lg transition-all"
+                    className="py-3 rounded-lg text-gray-300 data-[state=active]:bg-green-600 data-[state=active]:text-white data-[state=active]:shadow-lg transition-all hover:text-white hover:bg-white/5"
                 >
                     <span className="mr-2">🟢</span>
                     Kick

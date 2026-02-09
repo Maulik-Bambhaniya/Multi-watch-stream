@@ -36,6 +36,7 @@ type YouTubeSearchResponse struct {
 			Title                string `json:"title"`
 			Description          string `json:"description"`
 			LiveBroadcastContent string `json:"liveBroadcastContent"`
+			PublishedAt          string `json:"publishedAt"`
 			Thumbnails           struct {
 				Default struct {
 					URL string `json:"url"`
@@ -51,25 +52,15 @@ type YouTubeSearchResponse struct {
 	} `json:"items"`
 }
 
-// YouTubeVideoResponse for video details
-type YouTubeVideoResponse struct {
-	Items []struct {
-		ID                   string `json:"id"`
-		LiveStreamingDetails struct {
-			ConcurrentViewers string `json:"concurrentViewers"`
-		} `json:"liveStreamingDetails"`
-	} `json:"items"`
-}
-
-// SearchLiveStreams searches for live streams on YouTube
-func (s *YouTubeService) SearchLiveStreams(query string, maxResults int) ([]models.Streamer, error) {
+// SearchVideos searches for ALL videos on YouTube (live, past streams, regular videos)
+func (s *YouTubeService) SearchVideos(query string, maxResults int) ([]models.Streamer, error) {
 	if s.APIKey == "" {
 		return nil, fmt.Errorf("YouTube API key not configured")
 	}
 
-	// Build search URL
+	// Search for ALL videos (remove eventType=live to get all content)
 	searchURL := fmt.Sprintf(
-		"%s/search?part=snippet&type=video&eventType=live&q=%s&maxResults=%d&key=%s",
+		"%s/search?part=snippet&type=video&q=%s&maxResults=%d&order=relevance&key=%s",
 		s.BaseURL,
 		url.QueryEscape(query),
 		maxResults,
@@ -99,6 +90,8 @@ func (s *YouTubeService) SearchLiveStreams(query string, maxResults int) ([]mode
 			thumbnail = item.Snippet.Thumbnails.Medium.URL
 		}
 
+		isLive := item.Snippet.LiveBroadcastContent == "live"
+
 		streamers = append(streamers, models.Streamer{
 			ID:          item.ID.VideoID,
 			Platform:    "youtube",
@@ -106,7 +99,7 @@ func (s *YouTubeService) SearchLiveStreams(query string, maxResults int) ([]mode
 			DisplayName: item.Snippet.ChannelTitle,
 			Title:       item.Snippet.Title,
 			Thumbnail:   thumbnail,
-			IsLive:      item.Snippet.LiveBroadcastContent == "live",
+			IsLive:      isLive,
 			EmbedURL:    fmt.Sprintf("https://www.youtube.com/embed/%s?autoplay=1", item.ID.VideoID),
 			ChatURL:     fmt.Sprintf("https://www.youtube.com/live_chat?v=%s&embed_domain=localhost", item.ID.VideoID),
 		})
@@ -115,7 +108,13 @@ func (s *YouTubeService) SearchLiveStreams(query string, maxResults int) ([]mode
 	return streamers, nil
 }
 
-// GetStreamInfo gets detailed info for a specific stream
+// SearchLiveStreams searches for ONLY live streams (legacy function)
+func (s *YouTubeService) SearchLiveStreams(query string, maxResults int) ([]models.Streamer, error) {
+	// Now calls SearchVideos which searches all content
+	return s.SearchVideos(query, maxResults)
+}
+
+// GetStreamInfo gets detailed info for a specific video
 func (s *YouTubeService) GetStreamInfo(videoID string) (*models.Streamer, error) {
 	if s.APIKey == "" {
 		return nil, fmt.Errorf("YouTube API key not configured")
@@ -123,7 +122,7 @@ func (s *YouTubeService) GetStreamInfo(videoID string) (*models.Streamer, error)
 
 	// Get video details
 	videoURL := fmt.Sprintf(
-		"%s/videos?part=snippet,liveStreamingDetails&id=%s&key=%s",
+		"%s/videos?part=snippet,liveStreamingDetails,statistics&id=%s&key=%s",
 		s.BaseURL,
 		videoID,
 		s.APIKey,
@@ -139,15 +138,19 @@ func (s *YouTubeService) GetStreamInfo(videoID string) (*models.Streamer, error)
 		Items []struct {
 			ID      string `json:"id"`
 			Snippet struct {
-				ChannelID    string `json:"channelId"`
-				ChannelTitle string `json:"channelTitle"`
-				Title        string `json:"title"`
-				Thumbnails   struct {
+				ChannelID            string `json:"channelId"`
+				ChannelTitle         string `json:"channelTitle"`
+				Title                string `json:"title"`
+				LiveBroadcastContent string `json:"liveBroadcastContent"`
+				Thumbnails           struct {
 					High struct {
 						URL string `json:"url"`
 					} `json:"high"`
 				} `json:"thumbnails"`
 			} `json:"snippet"`
+			Statistics struct {
+				ViewCount string `json:"viewCount"`
+			} `json:"statistics"`
 			LiveStreamingDetails struct {
 				ConcurrentViewers string `json:"concurrentViewers"`
 			} `json:"liveStreamingDetails"`
@@ -164,9 +167,15 @@ func (s *YouTubeService) GetStreamInfo(videoID string) (*models.Streamer, error)
 
 	item := videoResp.Items[0]
 	viewerCount := 0
+
+	// Use concurrent viewers for live, otherwise use view count
 	if item.LiveStreamingDetails.ConcurrentViewers != "" {
 		fmt.Sscanf(item.LiveStreamingDetails.ConcurrentViewers, "%d", &viewerCount)
+	} else if item.Statistics.ViewCount != "" {
+		fmt.Sscanf(item.Statistics.ViewCount, "%d", &viewerCount)
 	}
+
+	isLive := item.Snippet.LiveBroadcastContent == "live"
 
 	return &models.Streamer{
 		ID:          item.ID,
@@ -176,7 +185,7 @@ func (s *YouTubeService) GetStreamInfo(videoID string) (*models.Streamer, error)
 		Title:       item.Snippet.Title,
 		Thumbnail:   item.Snippet.Thumbnails.High.URL,
 		ViewerCount: viewerCount,
-		IsLive:      true,
+		IsLive:      isLive,
 		EmbedURL:    fmt.Sprintf("https://www.youtube.com/embed/%s?autoplay=1", item.ID),
 		ChatURL:     fmt.Sprintf("https://www.youtube.com/live_chat?v=%s&embed_domain=localhost", item.ID),
 	}, nil
