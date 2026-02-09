@@ -3,6 +3,8 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"net/url"
 
@@ -50,6 +52,10 @@ type YouTubeSearchResponse struct {
 			} `json:"thumbnails"`
 		} `json:"snippet"`
 	} `json:"items"`
+	Error *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
 }
 
 // SearchVideos searches for ALL videos on YouTube (live, past streams, regular videos)
@@ -58,7 +64,7 @@ func (s *YouTubeService) SearchVideos(query string, maxResults int) ([]models.St
 		return nil, fmt.Errorf("YouTube API key not configured")
 	}
 
-	// Search for ALL videos (remove eventType=live to get all content)
+	// Search for ALL videos (no eventType filter)
 	searchURL := fmt.Sprintf(
 		"%s/search?part=snippet&type=video&q=%s&maxResults=%d&order=relevance&key=%s",
 		s.BaseURL,
@@ -67,20 +73,39 @@ func (s *YouTubeService) SearchVideos(query string, maxResults int) ([]models.St
 		s.APIKey,
 	)
 
+	log.Printf("[YouTube] Searching for: %s", query)
+
 	resp, err := http.Get(searchURL)
 	if err != nil {
+		log.Printf("[YouTube] HTTP error: %v", err)
 		return nil, fmt.Errorf("failed to search YouTube: %w", err)
 	}
 	defer resp.Body.Close()
 
+	// Read the body for logging
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("YouTube API error: status %d", resp.StatusCode)
+		log.Printf("[YouTube] API error (status %d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("YouTube API error: status %d - check API key and quota", resp.StatusCode)
 	}
 
 	var searchResp YouTubeSearchResponse
-	if err := json.NewDecoder(resp.Body).Decode(&searchResp); err != nil {
+	if err := json.Unmarshal(body, &searchResp); err != nil {
+		log.Printf("[YouTube] JSON decode error: %v", err)
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
+
+	// Check for API error in response
+	if searchResp.Error != nil {
+		log.Printf("[YouTube] API returned error: %s", searchResp.Error.Message)
+		return nil, fmt.Errorf("YouTube API: %s", searchResp.Error.Message)
+	}
+
+	log.Printf("[YouTube] Found %d results", len(searchResp.Items))
 
 	// Convert to our Streamer model
 	streamers := make([]models.Streamer, 0, len(searchResp.Items))
@@ -108,9 +133,8 @@ func (s *YouTubeService) SearchVideos(query string, maxResults int) ([]models.St
 	return streamers, nil
 }
 
-// SearchLiveStreams searches for ONLY live streams (legacy function)
+// SearchLiveStreams calls SearchVideos (for backward compatibility)
 func (s *YouTubeService) SearchLiveStreams(query string, maxResults int) ([]models.Streamer, error) {
-	// Now calls SearchVideos which searches all content
 	return s.SearchVideos(query, maxResults)
 }
 
@@ -120,7 +144,6 @@ func (s *YouTubeService) GetStreamInfo(videoID string) (*models.Streamer, error)
 		return nil, fmt.Errorf("YouTube API key not configured")
 	}
 
-	// Get video details
 	videoURL := fmt.Sprintf(
 		"%s/videos?part=snippet,liveStreamingDetails,statistics&id=%s&key=%s",
 		s.BaseURL,
@@ -168,7 +191,6 @@ func (s *YouTubeService) GetStreamInfo(videoID string) (*models.Streamer, error)
 	item := videoResp.Items[0]
 	viewerCount := 0
 
-	// Use concurrent viewers for live, otherwise use view count
 	if item.LiveStreamingDetails.ConcurrentViewers != "" {
 		fmt.Sscanf(item.LiveStreamingDetails.ConcurrentViewers, "%d", &viewerCount)
 	} else if item.Statistics.ViewCount != "" {

@@ -21,7 +21,8 @@ export function StreamPlayer({
 
         switch (streamer.platform) {
             case "youtube":
-                return `https://www.youtube.com/embed/${streamer.id}?autoplay=${autoplayParam}&mute=${muteParam}&rel=0`;
+                // Add controls=1 to ensure controls are visible
+                return `https://www.youtube.com/embed/${streamer.id}?autoplay=${autoplayParam}&mute=${muteParam}&rel=0&modestbranding=1&controls=1`;
             case "kick":
                 return `https://player.kick.com/${streamer.username}?autoplay=${autoplay}&muted=${muted}`;
             default:
@@ -42,7 +43,7 @@ export function StreamPlayer({
 
     return (
         <div className="relative w-full h-full flex bg-black rounded-lg overflow-hidden">
-            {/* Video player */}
+            {/* Video player - no overlay to block controls */}
             <div className={`relative ${showChat ? "w-3/4" : "w-full"} h-full`}>
                 <iframe
                     src={getEmbedUrl()}
@@ -50,22 +51,6 @@ export function StreamPlayer({
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                     allowFullScreen
                 />
-
-                {/* Stream info overlay */}
-                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-3 opacity-0 hover:opacity-100 transition-opacity">
-                    <div className="flex items-center gap-2">
-                        <span
-                            className={`px-2 py-0.5 text-xs font-medium rounded ${streamer.platform === "youtube" ? "bg-red-600" : "bg-green-600"
-                                }`}
-                        >
-                            {streamer.platform.toUpperCase()}
-                        </span>
-                        <span className="text-white text-sm font-medium truncate">
-                            {streamer.displayName}
-                        </span>
-                    </div>
-                    <p className="text-gray-300 text-xs truncate mt-1">{streamer.title}</p>
-                </div>
             </div>
 
             {/* Chat panel */}

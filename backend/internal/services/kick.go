@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"multistream/backend/internal/models"
@@ -52,14 +54,21 @@ type KickChannelResponse struct {
 
 // SearchChannels searches for channels on Kick
 func (s *KickService) SearchChannels(query string, maxResults int) ([]models.Streamer, error) {
+	log.Printf("[Kick] Searching for: %s", query)
+
+	// Clean the query - remove spaces and convert to lowercase for slug
+	cleanQuery := strings.ToLower(strings.TrimSpace(query))
+	cleanQuery = strings.ReplaceAll(cleanQuery, " ", "")
+
 	// Try the channel endpoint directly for exact matches
-	channel, err := s.GetChannelInfo(query)
+	channel, err := s.GetChannelInfo(cleanQuery)
 	if err == nil && channel != nil {
+		log.Printf("[Kick] Found channel: %s", channel.DisplayName)
 		return []models.Streamer{*channel}, nil
 	}
 
-	// If exact match fails, return empty (Kick doesn't have a public search API)
-	// We'll rely on YouTube for general searches
+	log.Printf("[Kick] No exact match found for: %s (error: %v)", cleanQuery, err)
+	// Return empty - Kick doesn't have a public search API
 	return []models.Streamer{}, nil
 }
 
@@ -70,8 +79,12 @@ func (s *KickService) SearchLiveStreams(query string, maxResults int) ([]models.
 
 // GetChannelInfo gets detailed info for a specific channel
 func (s *KickService) GetChannelInfo(channelSlug string) (*models.Streamer, error) {
-	// Use v1 API for channel info
-	channelURL := fmt.Sprintf("%s/channels/%s", s.BaseURL, url.PathEscape(channelSlug))
+	// Clean the slug
+	cleanSlug := strings.ToLower(strings.TrimSpace(channelSlug))
+	cleanSlug = strings.ReplaceAll(cleanSlug, " ", "")
+
+	channelURL := fmt.Sprintf("%s/channels/%s", s.BaseURL, url.PathEscape(cleanSlug))
+	log.Printf("[Kick] Fetching channel: %s", channelURL)
 
 	req, err := http.NewRequest("GET", channelURL, nil)
 	if err != nil {
@@ -80,25 +93,32 @@ func (s *KickService) GetChannelInfo(channelSlug string) (*models.Streamer, erro
 
 	// Set headers to look like a browser request
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Origin", "https://kick.com")
 	req.Header.Set("Referer", "https://kick.com/")
 
 	resp, err := s.Client.Do(req)
 	if err != nil {
+		log.Printf("[Kick] HTTP error: %v", err)
 		return nil, fmt.Errorf("failed to get channel info: %w", err)
 	}
 	defer resp.Body.Close()
 
+	body, _ := io.ReadAll(resp.Body)
+
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("channel not found (status %d): %s", resp.StatusCode, string(body))
+		log.Printf("[Kick] API error (status %d): %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("channel not found: %s", cleanSlug)
 	}
 
 	var channelResp KickChannelResponse
-	if err := json.NewDecoder(resp.Body).Decode(&channelResp); err != nil {
+	if err := json.Unmarshal(body, &channelResp); err != nil {
+		log.Printf("[Kick] JSON decode error: %v", err)
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
+
+	log.Printf("[Kick] Successfully fetched channel: %s (ID: %d)", channelResp.User.Username, channelResp.ID)
 
 	streamer := &models.Streamer{
 		ID:          fmt.Sprintf("%d", channelResp.ID),
@@ -120,9 +140,12 @@ func (s *KickService) GetChannelInfo(channelSlug string) (*models.Streamer, erro
 		}
 	}
 
-	// Add category info to title if no livestream title
 	if streamer.Title == "" && len(channelResp.RecentCategories) > 0 {
 		streamer.Title = channelResp.RecentCategories[0].Name
+	}
+
+	if streamer.Title == "" {
+		streamer.Title = channelResp.User.Username
 	}
 
 	return streamer, nil
